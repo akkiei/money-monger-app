@@ -1,6 +1,7 @@
 import { useRouter } from "expo-router";
 import { Pressable, StyleSheet, Text, View } from "react-native";
 import { useSafeAreaInsets } from "react-native-safe-area-context";
+import { useGameStore } from "../src/state/store";
 import { common } from "../src/styles/common";
 import { brutal, colors, spacing, typography } from "../src/theme/tokens";
 
@@ -8,6 +9,14 @@ import { brutal, colors, spacing, typography } from "../src/theme/tokens";
 export default function MainMenu() {
   const router = useRouter();
   const insets = useSafeAreaInsets();
+  const reset = useGameStore((s) => s.reset);
+
+  // Clear any leftover session state before entering a fresh create/join flow,
+  // so a stale snapshot can't trigger an early navigation to the board.
+  function go(path: '/create-room' | '/join-game') {
+    reset();
+    router.push(path);
+  }
 
   return (
     <View style={styles.root}>
@@ -23,7 +32,7 @@ export default function MainMenu() {
       <View style={styles.content}>
         <Pressable
           accessibilityRole="button"
-          onPress={() => router.push("/create-room")}
+          onPress={() => go("/create-room")}
           style={({ pressed }) => [
             styles.card,
             styles.cardHero,
@@ -31,14 +40,14 @@ export default function MainMenu() {
           ]}
         >
           <Text style={styles.heroLabel} numberOfLines={1} adjustsFontSizeToFit>
-            START GAME
+            CREATE GAME
           </Text>
-          <Text style={styles.caption}>HOST A NEW ROOM</Text>
+          <Text style={styles.caption}>HOST A NEW GAME</Text>
         </Pressable>
 
         <Pressable
           accessibilityRole="button"
-          onPress={() => router.push("/join-game")}
+          onPress={() => go("/join-game")}
           style={({ pressed }) => [
             styles.card,
             styles.cardJoin,

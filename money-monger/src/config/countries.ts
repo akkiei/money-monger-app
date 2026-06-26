@@ -27,7 +27,7 @@ export type TileLabel = { name: string; region: string; tier: number };
 export function tileLabelsFor(id: string): Record<number, TileLabel> {
   const out: Record<number, TileLabel> = {};
   countryById(id)?.regions?.forEach((r) =>
-    r.cities.forEach((city) => {
+    r.cities?.forEach((city) => {
       out[city.tileIndex] = { name: city.name, region: r.name, tier: r.tier };
     }),
   );

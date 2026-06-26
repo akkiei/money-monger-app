@@ -1,3 +1,4 @@
+import { useRouter } from 'expo-router';
 import { useState } from 'react';
 import { Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
@@ -12,10 +13,16 @@ const NAME_MAX = 16;
 // (Scan QR / paste invite link from the design are post-MVP — need camera + deep links.)
 export default function JoinGame() {
   const insets = useSafeAreaInsets();
+  const router = useRouter();
   const [name, setName] = useState('');
   const [code, setCode] = useState('');
 
   const canJoin = name.trim().length > 0 && code.length === CODE_LENGTH;
+
+  // The Waiting Room performs the actual join (and owns the connecting/error UI).
+  function onJoin() {
+    router.push({ pathname: '/waiting-room', params: { code, name: name.trim() } });
+  }
 
   return (
     <View style={styles.root}>
@@ -43,7 +50,7 @@ export default function JoinGame() {
         {/* join */}
         <Pressable
           disabled={!canJoin}
-          // TODO: wire to joinGame(code, name, token) → navigate to Waiting Room
+          onPress={onJoin}
           style={({ pressed }) => [
             styles.join,
             canJoin ? styles.joinOn : styles.joinOff,

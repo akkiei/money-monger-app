@@ -1,29 +1,18 @@
 /**
- * net/colyseus.ts — game-server connection (colyseus.js). Create/join/rejoin
- * `game_room`, persist the active-game pointer on JOINED, and a typed `send`.
+ * net/colyseus.ts — low-level game-server transport (colyseus.js). Create / join
+ * / rejoin the `game_room` and a typed `send`. Lifecycle wiring (state → store,
+ * JOINED → pointer, errors) lives in net/session.ts; this file is pure transport.
  * filterBy(['code']) on the server routes join({code}) to the host's room.
  */
 import { Client, Room } from 'colyseus.js';
 import { ENV } from '../lib/env';
 import { requestId } from '../lib/ids';
-import { savePointer } from '../lib/storage';
 import type { CommandPayloads, CommandType, GameConfigKnobs } from '../shared/types';
+import type { GameState } from '../state/schema';
 
 let _client: Client | null = null;
 export function gameClient(): Client {
   return (_client ??= new Client(ENV.GAME_WS_URL));
-}
-
-interface JoinedMsg {
-  playerId: string;
-  code: string;
-  reconnectToken: string;
-}
-
-function bindJoined(room: Room): void {
-  room.onMessage('JOINED', (m: JoinedMsg) => {
-    void savePointer({ code: m.code, playerId: m.playerId, reconnectToken: m.reconnectToken });
-  });
 }
 
 export interface CreateOpts extends Partial<GameConfigKnobs> {
@@ -32,34 +21,27 @@ export interface CreateOpts extends Partial<GameConfigKnobs> {
   token?: string;
 }
 
-export async function createGame(opts: CreateOpts): Promise<Room> {
-  const room = await gameClient().create('game_room', opts);
-  bindJoined(room);
-  return room;
+export function createGame(opts: CreateOpts): Promise<Room<GameState>> {
+  return gameClient().create<GameState>('game_room', opts);
 }
 
-export async function joinGame(code: string, name: string, token?: string): Promise<Room> {
-  const room = await gameClient().join('game_room', { code, name, token });
-  bindJoined(room);
-  return room;
+export function joinGame(code: string, name: string, token?: string): Promise<Room<GameState>> {
+  return gameClient().join<GameState>('game_room', { code, name, token });
 }
 
-export async function rejoinGame(
+// joinOrCreate (not join): if the server restarted and the in-memory room is
+// gone, this recreates it, which triggers the server's snapshot rehydrate path.
+// An existing room is still matched by filterBy(['code']) and simply joined.
+export function rejoinGame(
   code: string,
   playerId: string,
   reconnectToken: string,
   token?: string,
-): Promise<Room> {
-  const room = await gameClient().join('game_room', { code, playerId, reconnectToken, token });
-  bindJoined(room);
-  return room;
+): Promise<Room<GameState>> {
+  return gameClient().joinOrCreate<GameState>('game_room', { code, playerId, reconnectToken, token });
 }
 
 // Typed command send: `{ requestId, payload }` envelope the server expects.
-export function send<T extends CommandType>(
-  room: Room,
-  type: T,
-  payload: CommandPayloads[T],
-): void {
+export function send<T extends CommandType>(room: Room<GameState>, type: T, payload: CommandPayloads[T]): void {
   room.send(type, { requestId: requestId(), payload });
 }

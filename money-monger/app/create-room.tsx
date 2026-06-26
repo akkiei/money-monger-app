@@ -1,14 +1,17 @@
-import { useState } from 'react';
+import { useRouter } from 'expo-router';
+import { useEffect, useState } from 'react';
 import { Platform, Pressable, ScrollView, StyleSheet, Text, View } from 'react-native';
 import { useSafeAreaInsets } from 'react-native-safe-area-context';
 import { BackButton, PlayerRow, Segmented, TextField } from '../src/components';
 import { COUNTRIES, countryById } from '../src/config/countries';
-import { generateRoomCode } from '../src/shared/codes';
+import { command, host, leaveGame } from '../src/net/session';
+import { isInProgress } from '../src/state/snapshot';
+import { useGameStore } from '../src/state/store';
 import { brutal, colors, spacing, typography } from '../src/theme/tokens';
 
-// Host Lobby (Create Room). Host knobs: rounds · country · starting cash · theme.
-// Presentational + local state for now; TODO: wire to createGame() + room.state
-// (live 4-char code, live player list) and SET_CONFIG / START_GAME commands.
+// Host Lobby. Setup phase: enter name + knobs → CREATE ROOM (host()). Lobby
+// phase: live code + roster + editable settings (SET_CONFIG) → START_GAME.
+// Navigates to /board once the game leaves the lobby phase.
 const ROUND_OPTIONS: { label: string; value: number | null }[] = [
   { label: '10', value: 10 },
   { label: '20', value: 20 },
@@ -16,25 +19,78 @@ const ROUND_OPTIONS: { label: string; value: number | null }[] = [
   { label: '∞', value: null }, // null = Unlimited (maxRounds)
 ];
 const CASH_VALUES = [1000, 1500, 2000, 2500];
+const THEME_ID = 'default';
+const MAX_PLAYERS = 10; // matches the server seat cap / color palette size
 
 export default function CreateRoom() {
   const insets = useSafeAreaInsets();
+  const router = useRouter();
 
-  // host identity + knobs (local until wired to createGame() / SET_CONFIG)
+  const snapshot = useGameStore((s) => s.snapshot);
+  const status = useGameStore((s) => s.status);
+  const error = useGameStore((s) => s.error);
+  // setup → lobby is gated on an explicit flag (not snapshot presence) so a
+  // stale snapshot from a prior session can't skip the setup form.
+  const [hosting, setHosting] = useState(false);
+  const inLobby = hosting;
+
+  // host identity + knobs (local editing model; pushed via SET_CONFIG in lobby)
   const [hostName, setHostName] = useState('');
   const [maxRounds, setMaxRounds] = useState<number | null>(20);
   const [countryId, setCountryId] = useState<string>(COUNTRIES[0]?.id ?? 'india');
   const [startingCash, setStartingCash] = useState<number>(1500);
   const [copied, setCopied] = useState(false);
 
-  // TODO: code + players come from room.state once createGame() is wired.
-  const [code] = useState(() => generateRoomCode());
-  const players = [{ id: 'host', name: hostName.trim().toUpperCase() || 'YOU', isHost: true }];
-  const canStart = hostName.trim().length > 0 && players.length >= 2;
+  // host starts the game → everyone moves to the board (only after we've created)
+  useEffect(() => {
+    if (hosting && status === 'connected' && isInProgress(snapshot?.phase)) {
+      router.replace('/board');
+    }
+  }, [hosting, status, snapshot?.phase, router]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const country = countryById(countryId) ?? COUNTRIES[0];
   const sym = country?.currency.symbol ?? '';
   const cashOptions = CASH_VALUES.map((v) => ({ label: `${sym}${v}`, value: v }));
+
+  const code = snapshot?.code || '----';
+  const players = snapshot?.players ?? [];
+  const connecting = status === 'connecting';
+  const canCreate = hostName.trim().length > 0 && !connecting;
+  const canStart = players.length >= 2;
+
+  function pushConfig(r = maxRounds, c = countryId, cash = startingCash) {
+    command('SET_CONFIG', { maxRounds: r, countryId: c, startingCash: cash, themeId: THEME_ID });
+  }
+  const onRounds = (v: number | null) => {
+    setMaxRounds(v);
+    if (inLobby) pushConfig(v, countryId, startingCash);
+  };
+  const onCountry = (v: string) => {
+    setCountryId(v);
+    if (inLobby) pushConfig(maxRounds, v, startingCash);
+  };
+  const onCash = (v: number) => {
+    setStartingCash(v);
+    if (inLobby) pushConfig(maxRounds, countryId, v);
+  };
+
+  async function onCreate() {
+    try {
+      await host({ name: hostName.trim(), maxRounds, countryId, startingCash, themeId: THEME_ID });
+      setHosting(true);
+      pushConfig(); // lock exact knobs (create coerces null rounds → default)
+    } catch {
+      /* status/error already set in the store */
+    }
+  }
+
+  async function onBack() {
+    if (inLobby) {
+      await leaveGame();
+      setHosting(false);
+    }
+    router.back();
+  }
 
   function copyCode() {
     const nav = (globalThis as unknown as { navigator?: { clipboard?: { writeText?: (t: string) => Promise<void> } } }).navigator;
@@ -45,99 +101,111 @@ export default function CreateRoom() {
 
   return (
     <View style={styles.root}>
-      <BackButton />
+      <BackButton onPress={onBack} />
       <View style={[styles.header, { paddingTop: insets.top + spacing.stackLg }]}>
         <Text style={styles.headerTitle}>GAME ROOM</Text>
       </View>
 
       <ScrollView contentContainerStyle={styles.content} showsVerticalScrollIndicator={false}>
-        {/* host name */}
-        <Text style={styles.knobLabel}>YOUR NAME</Text>
-        <TextField value={hostName} onChangeText={setHostName} placeholder="e.g. ALEX" maxLength={16} />
-
-        {/* room code */}
-        <View style={styles.codeCard}>
-          <View style={styles.codeTag}>
-            <Text style={styles.codeTagText}>ROOM CODE</Text>
-          </View>
-          <Text style={styles.code}>{code}</Text>
-        </View>
-        <View style={styles.codeActions}>
-          <Pressable onPress={copyCode} style={({ pressed }) => [styles.codeBtn, styles.codeBtnDark, pressed && styles.pressed]}>
-            <Text style={styles.codeBtnTextLight}>{copied ? 'COPIED!' : 'COPY CODE'}</Text>
-          </Pressable>
-          <Pressable style={({ pressed }) => [styles.codeBtn, styles.codeBtnLight, pressed && styles.pressed]}>
-            <Text style={styles.codeBtnText}>SHARE</Text>
-          </Pressable>
-        </View>
-
-        {/* players */}
-        <Text style={styles.sectionTitle}>PLAYERS ({players.length})</Text>
-        {players.map((p) => (
-          <PlayerRow key={p.id} name={p.name} isHost={p.isHost} />
-        ))}
-        <View style={styles.waitingRow}>
-          <Text style={styles.waitingText}>WAITING FOR PLAYERS…</Text>
-        </View>
-
-        {/* settings */}
-        <View style={styles.sectionHeadRow}>
-          <Text style={styles.sectionTitle}>SETTINGS</Text>
-          <View style={styles.hostOnly}>
-            <Text style={styles.hostOnlyText}>HOST ONLY</Text>
-          </View>
-        </View>
-
-        <Text style={styles.knobLabel}>ROUNDS TO WIN</Text>
-        <Segmented options={ROUND_OPTIONS} value={maxRounds} onChange={setMaxRounds} />
-
-        <Text style={styles.knobLabel}>COUNTRY</Text>
-        <ScrollView
-          horizontal
-          showsHorizontalScrollIndicator={false}
-          contentContainerStyle={styles.countryRow}
-        >
-          {COUNTRIES.map((c) => {
-            const selected = c.id === countryId;
-            return (
-              <Pressable
-                key={c.id}
-                onPress={() => setCountryId(c.id)}
-                style={[styles.countryChip, selected ? styles.countryChipOn : styles.countryChipOff]}
-              >
-                <Text style={styles.countryFlag}>{c.flag}</Text>
-                <Text style={styles.countryName}>{c.name.toUpperCase()}</Text>
+        {inLobby ? (
+          <>
+            {/* room code */}
+            <View style={styles.codeCard}>
+              <View style={styles.codeTag}>
+                <Text style={styles.codeTagText}>ROOM CODE</Text>
+              </View>
+              <Text style={styles.code}>{code}</Text>
+            </View>
+            <View style={styles.codeActions}>
+              <Pressable onPress={copyCode} style={({ pressed }) => [styles.codeBtn, styles.codeBtnDark, pressed && styles.pressed]}>
+                <Text style={styles.codeBtnTextLight}>{copied ? 'COPIED!' : 'COPY CODE'}</Text>
               </Pressable>
-            );
-          })}
-        </ScrollView>
+              <Pressable style={({ pressed }) => [styles.codeBtn, styles.codeBtnLight, pressed && styles.pressed]}>
+                <Text style={styles.codeBtnText}>SHARE</Text>
+              </Pressable>
+            </View>
 
-        <Text style={styles.knobLabel}>STARTING CASH</Text>
-        <Segmented options={cashOptions} value={startingCash} onChange={setStartingCash} />
+            {/* players */}
+            <Text style={styles.sectionTitle}>PLAYERS ({players.length})</Text>
+            {players.map((p, i) => (
+              <PlayerRow key={p.id} name={p.name || 'PLAYER'} color={p.color} seatIndex={i} isHost={p.isHost} />
+            ))}
+            {!canStart && (
+              <View style={styles.waitingRow}>
+                <Text style={styles.waitingText}>WAITING FOR PLAYERS…</Text>
+              </View>
+            )}
 
-        <Text style={styles.knobLabel}>THEME</Text>
-        <View style={styles.themeRow}>
-          <View style={[styles.themeChip, styles.themeChipOn]}>
-            <Text style={styles.themeChipText}>CLASSIC</Text>
-          </View>
-          <Text style={styles.themeNote}>More themes soon</Text>
-        </View>
+            {/* settings (host-only, editable after creating the room) */}
+            <View style={styles.sectionHeadRow}>
+              <Text style={styles.sectionTitle}>SETTINGS</Text>
+              <View style={styles.hostOnly}>
+                <Text style={styles.hostOnlyText}>HOST ONLY</Text>
+              </View>
+            </View>
 
-        {/* start */}
-        <Pressable
-          disabled={!canStart}
-          style={({ pressed }) => [
-            styles.start,
-            canStart ? styles.startOn : styles.startOff,
-            canStart && pressed && styles.pressed,
-          ]}
-        >
-          <Text style={[styles.startText, !canStart && styles.startTextOff]}>START GAME</Text>
-        </Pressable>
-        {!canStart && (
-          <Text style={styles.startHint}>
-            {hostName.trim().length === 0 ? 'ENTER YOUR NAME' : 'NEED AT LEAST 2 PLAYERS'}
-          </Text>
+            <View style={styles.maxPlayersRow}>
+              <Text style={styles.knobLabel}>MAX PLAYERS</Text>
+              <Text style={styles.maxPlayersValue}>{MAX_PLAYERS}</Text>
+            </View>
+
+            <Text style={styles.knobLabel}>ROUNDS TO WIN</Text>
+            <Segmented options={ROUND_OPTIONS} value={maxRounds} onChange={onRounds} />
+
+            <Text style={styles.knobLabel}>COUNTRY</Text>
+            <ScrollView horizontal showsHorizontalScrollIndicator={false} contentContainerStyle={styles.countryRow}>
+              {COUNTRIES.map((c) => {
+                const selected = c.id === countryId;
+                return (
+                  <Pressable key={c.id} onPress={() => onCountry(c.id)} style={[styles.countryChip, selected ? styles.countryChipOn : styles.countryChipOff]}>
+                    <Text style={styles.countryFlag}>{c.flag}</Text>
+                    <Text style={styles.countryName}>{c.name.toUpperCase()}</Text>
+                  </Pressable>
+                );
+              })}
+            </ScrollView>
+
+            <Text style={styles.knobLabel}>STARTING CASH</Text>
+            <Segmented options={cashOptions} value={startingCash} onChange={onCash} />
+
+            <Text style={styles.knobLabel}>THEME</Text>
+            <View style={styles.themeRow}>
+              <View style={[styles.themeChip, styles.themeChipOn]}>
+                <Text style={styles.themeChipText}>CLASSIC</Text>
+              </View>
+              <Text style={styles.themeNote}>More themes coming soon...</Text>
+            </View>
+
+            {/* start */}
+            <Pressable
+              disabled={!canStart}
+              onPress={() => command('START_GAME', undefined)}
+              style={({ pressed }) => [styles.action, canStart ? styles.startOn : styles.actionOff, canStart && pressed && styles.pressed]}
+            >
+              <Text style={[styles.actionText, !canStart && styles.actionTextOff]} numberOfLines={1} adjustsFontSizeToFit>
+                {canStart ? 'START GAME' : 'WAITING FOR PLAYERS…'}
+              </Text>
+            </Pressable>
+            {!canStart && <Text style={styles.hint}>SHARE THE CODE ABOVE TO INVITE PLAYERS</Text>}
+          </>
+        ) : (
+          <>
+            {/* setup: name only — settings are configured in the lobby after creating */}
+            <Text style={styles.knobLabel}>YOUR NAME</Text>
+            <TextField value={hostName} onChangeText={setHostName} placeholder="e.g. ALEX" maxLength={16} />
+
+            <Pressable
+              disabled={!canCreate}
+              onPress={onCreate}
+              style={({ pressed }) => [styles.action, canCreate ? styles.createOn : styles.actionOff, canCreate && pressed && styles.pressed]}
+            >
+              <Text style={[styles.actionText, styles.actionTextDark, !canCreate && styles.actionTextOff]}>
+                {connecting ? 'CREATING…' : 'CREATE ROOM'}
+              </Text>
+            </Pressable>
+            {hostName.trim().length === 0 && <Text style={styles.hint}>ENTER YOUR NAME</Text>}
+            {error && <Text style={styles.errorHint}>COULDN’T CREATE ROOM — TRY AGAIN</Text>}
+          </>
         )}
       </ScrollView>
     </View>
@@ -198,6 +266,8 @@ const styles = StyleSheet.create({
 
   // knobs
   knobLabel: { ...typography.labelLg, color: colors.onSurface, marginTop: spacing.stackMd },
+  maxPlayersRow: { flexDirection: 'row', alignItems: 'center', justifyContent: 'space-between' },
+  maxPlayersValue: { ...typography.numberDisplay, fontSize: 18, color: colors.onSurfaceVariant, marginTop: spacing.stackMd },
   countryRow: { gap: spacing.stackSm, paddingVertical: spacing.stackSm, paddingRight: spacing.stackSm },
   countryChip: { alignItems: 'center', gap: 4, paddingHorizontal: spacing.stackMd, paddingVertical: spacing.stackSm, ...brutal.border, minWidth: 92 },
   countryChipOn: { backgroundColor: colors.primaryContainer, ...brutal.offset },
@@ -210,15 +280,18 @@ const styles = StyleSheet.create({
   themeChip: { paddingHorizontal: spacing.stackMd, paddingVertical: spacing.stackSm, ...brutal.border, ...brutal.offset },
   themeChipOn: { backgroundColor: colors.tertiary },
   themeChipText: { ...typography.labelLg, color: colors.onTertiary },
-  themeNote: { ...typography.bodyMd, color: colors.onSurfaceVariant },
+  themeNote: { ...typography.labelMd, color: colors.onSurfaceVariant },
 
-  // start
-  start: { paddingVertical: 20, alignItems: 'center', ...brutal.border, marginTop: spacing.stackLg },
+  // primary action
+  action: { paddingVertical: 20, alignItems: 'center', ...brutal.border, marginTop: spacing.stackLg },
   startOn: { backgroundColor: colors.secondary, ...brutal.offset },
-  startOff: { backgroundColor: colors.surfaceVariant },
-  startText: { ...typography.displayLg, fontSize: 32, lineHeight: 36, color: colors.onPrimary },
-  startTextOff: { color: colors.onSurfaceVariant },
-  startHint: { ...typography.labelMd, color: colors.onSurfaceVariant, textAlign: 'center', letterSpacing: 1 },
+  createOn: { backgroundColor: colors.primaryContainer, ...brutal.offset },
+  actionOff: { backgroundColor: colors.surfaceVariant },
+  actionText: { ...typography.displayLg, fontSize: 32, lineHeight: 36, color: colors.onPrimary },
+  actionTextDark: { color: colors.onPrimaryContainer },
+  actionTextOff: { color: colors.onSurfaceVariant },
+  hint: { ...typography.labelMd, color: colors.onSurfaceVariant, textAlign: 'center', letterSpacing: 1 },
+  errorHint: { ...typography.labelMd, color: colors.error, textAlign: 'center', letterSpacing: 1 },
 
   pressed: { transform: [{ translateX: 6 }, { translateY: 6 }], shadowOffset: { width: 0, height: 0 } },
 });

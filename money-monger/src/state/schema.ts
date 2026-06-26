@@ -106,6 +106,10 @@ export class GameState extends Schema {
   @type(PendingPurchase) pendingPurchase?: PendingPurchase;
   @type(PendingRaise) pendingRaise?: PendingRaise;
 
+  // turn-flow flags the client needs to choose the next action (roll vs end turn)
+  @type('boolean') awaitingRoll = false;
+  @type('boolean') rollAgain = false;
+
   // ── server-only (NOT @type → never synced; captured in JSON snapshots) ──
   rngSeed = '';
   rngCursor = 0;
@@ -114,8 +118,6 @@ export class GameState extends Schema {
     govt_grant: [],
   };
   turnDoubles = 0;
-  awaitingRoll = false;
-  rollAgain = false;
   extraTurnPending = false;
   pendingDistribution?: { recipients: string[]; amount: number };
   auctionBids?: Record<string, number>;

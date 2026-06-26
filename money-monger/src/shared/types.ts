@@ -33,12 +33,12 @@ export type TokenColor =
   | "blue"
   | "green"
   | "yellow"
-  | "black"
-  | "white"
   | "purple"
   | "orange"
   | "pink"
-  | "cyan";
+  | "cyan"
+  | "aqua"
+  | "magenta";
 
 // ─── Enums ────────────────────────────────────────────────────
 export type GamePhase =
@@ -151,6 +151,7 @@ export type EventType =
   | "RAISE_FUNDS_REQUIRED"
   | "BANKRUPTCY"
   | "TURN_CHANGED"
+  | "AUTO_PLAY"
   | "ROUND_COMPLETED"
   | "ROUND_LIMIT_REACHED"
   | "VOTE_STARTED"
@@ -203,7 +204,7 @@ export interface EventPayloads {
     amount: number;
   };
   TAX_PAID: { playerId: PlayerId; tileIndex: TileIndex; amount: number };
-  CARD_DRAWN: { playerId: PlayerId; deck: CardDeck; cardId: string };
+  CARD_DRAWN: { playerId: PlayerId; deck: CardDeck; cardId: string; delta: number }; // delta = net cash change to the drawer
   AUDIT_APPLIED: { playerId: PlayerId; turns: number };
   AUDIT_RESOLVED: {
     playerId: PlayerId;
@@ -226,6 +227,7 @@ export interface EventPayloads {
   };
   BANKRUPTCY: { playerId: PlayerId; creditorId: PlayerId | null };
   TURN_CHANGED: { playerId: PlayerId; turnEndsAt: number };
+  AUTO_PLAY: { playerId: PlayerId }; // Banker auto-played an idle human's turn
   ROUND_COMPLETED: { round: number };
   ROUND_LIMIT_REACHED: { round: number };
   VOTE_STARTED: { endsAt: number };

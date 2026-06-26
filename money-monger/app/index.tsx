@@ -1,10 +1,62 @@
 import { useRouter } from 'expo-router';
-import { StyleSheet, Text, View } from 'react-native';
+import { useEffect, useState } from 'react';
+import { ActivityIndicator, Modal, Pressable, StyleSheet, Text, View } from 'react-native';
 import { BrutalButton, Screen } from '../src/components';
+import { clearPointer, loadPointer, type GamePointer } from '../src/lib/storage';
+import { leaveGame, tryRejoin } from '../src/net/session';
+import { isInProgress } from '../src/state/snapshot';
+import { useGameStore } from '../src/state/store';
 import { brutal, colors, spacing, typography } from '../src/theme/tokens';
 
 export default function Splash() {
   const router = useRouter();
+  // On launch (incl. a web page refresh) check for an active-game pointer. If
+  // one exists, prompt the player to resume it before showing the menu.
+  const [pointer, setPointer] = useState<GamePointer | null>(null);
+  const [joining, setJoining] = useState(false);
+  const [failed, setFailed] = useState(false);
+  const status = useGameStore((s) => s.status);
+  const snapshot = useGameStore((s) => s.snapshot);
+
+  useEffect(() => {
+    void loadPointer().then(setPointer);
+  }, []);
+
+  // Once the resumed room's state has decoded, route into the right screen.
+  useEffect(() => {
+    if (!joining || status !== 'connected' || !snapshot) return;
+    const phase = snapshot.phase;
+    if (phase === 'game_over') {
+      void leaveGame(); // the game's over — clear the pointer and show the menu
+      setJoining(false);
+      setPointer(null);
+      return;
+    }
+    router.replace(isInProgress(phase) ? '/board' : '/waiting-room');
+  }, [joining, status, snapshot, router]);
+
+  const resume = async () => {
+    setFailed(false);
+    setJoining(true);
+    let ok = false;
+    try {
+      ok = await tryRejoin();
+    } catch {
+      ok = false;
+    }
+    if (!ok) {
+      // pointer was stale/unreachable (tryRejoin clears it on failure)
+      setJoining(false);
+      setFailed(true);
+    }
+    // success → the routing effect navigates once the snapshot arrives
+  };
+
+  const dismiss = async () => {
+    await clearPointer();
+    setPointer(null);
+    setFailed(false);
+  };
 
   return (
     <Screen>
@@ -31,7 +83,7 @@ export default function Splash() {
       </View>
 
       <BrutalButton
-        label="INITIATE"
+        label="Let's GO!"
         variant="primary"
         style={styles.cta}
         onPress={() => router.replace('/main-menu')}
@@ -40,6 +92,45 @@ export default function Splash() {
       <View style={styles.version}>
         <Text style={styles.versionText}>v1.0.0</Text>
       </View>
+
+      {/* Resume prompt — shown when an active-game pointer is found on launch. */}
+      <Modal visible={!!pointer} transparent animationType="fade" onRequestClose={dismiss}>
+        <View style={styles.backdrop}>
+          <View style={styles.card}>
+            <Text style={styles.cardTitle}>{failed ? 'COULDN’T RECONNECT' : 'RESUME GAME?'}</Text>
+            <Text style={styles.cardSub}>{failed ? 'THE GAME MAY BE STARTING UP — TRY AGAIN.' : 'YOU HAVE AN ACTIVE GAME.'}</Text>
+            <View style={styles.codeChip}>
+              <Text style={styles.codeChipText}>{pointer?.code ?? ''}</Text>
+            </View>
+            {!failed && !!pointer?.name && <Text style={styles.cardName}>as {pointer.name}</Text>}
+
+            {joining ? (
+              <View style={styles.joiningRow}>
+                <ActivityIndicator color={colors.onSurface} />
+                <Text style={styles.joiningText}>RECONNECTING…</Text>
+              </View>
+            ) : failed ? (
+              <View style={styles.cardActions}>
+                <Pressable onPress={resume} style={({ pressed }) => [styles.cardBtn, styles.cardBtnBlue, pressed && styles.cardPressed]}>
+                  <Text style={styles.cardBtnTextLight}>RETRY</Text>
+                </Pressable>
+                <Pressable onPress={dismiss} style={({ pressed }) => [styles.cardBtn, styles.cardBtnLight, pressed && styles.cardPressed]}>
+                  <Text style={styles.cardBtnText}>LEAVE</Text>
+                </Pressable>
+              </View>
+            ) : (
+              <View style={styles.cardActions}>
+                <Pressable onPress={resume} style={({ pressed }) => [styles.cardBtn, styles.cardBtnBlue, pressed && styles.cardPressed]}>
+                  <Text style={styles.cardBtnTextLight}>RESUME</Text>
+                </Pressable>
+                <Pressable onPress={dismiss} style={({ pressed }) => [styles.cardBtn, styles.cardBtnLight, pressed && styles.cardPressed]}>
+                  <Text style={styles.cardBtnText}>LEAVE</Text>
+                </Pressable>
+              </View>
+            )}
+          </View>
+        </View>
+      </Modal>
     </Screen>
   );
 }
@@ -108,4 +199,31 @@ const styles = StyleSheet.create({
     paddingVertical: spacing.stackSm,
   },
   versionText: { ...typography.labelMd, color: colors.onError, letterSpacing: 2 },
+
+  // resume-game prompt
+  backdrop: { flex: 1, backgroundColor: 'rgba(26,26,26,0.6)', alignItems: 'center', justifyContent: 'center', padding: spacing.gutter },
+  card: {
+    width: '100%',
+    maxWidth: 340,
+    backgroundColor: colors.surfaceBright,
+    ...brutal.border,
+    ...brutal.offset,
+    padding: spacing.stackLg,
+    alignItems: 'center',
+    gap: spacing.stackSm,
+  },
+  cardTitle: { ...typography.headlineMd, color: colors.onSurface, letterSpacing: 1 },
+  cardSub: { ...typography.labelMd, color: colors.onSurfaceVariant, letterSpacing: 1, textAlign: 'center' },
+  codeChip: { backgroundColor: colors.onSurface, paddingHorizontal: spacing.stackMd, paddingVertical: spacing.stackSm, marginTop: spacing.stackSm },
+  codeChipText: { ...typography.numberDisplay, color: colors.surface, letterSpacing: 4 },
+  cardName: { ...typography.labelLg, color: colors.onSurface, letterSpacing: 1 },
+  cardActions: { flexDirection: 'row', gap: spacing.stackSm, marginTop: spacing.stackMd, width: '100%' },
+  cardBtn: { flex: 1, paddingVertical: 14, alignItems: 'center', ...brutal.border },
+  cardBtnBlue: { backgroundColor: colors.tertiary },
+  cardBtnLight: { backgroundColor: colors.surfaceContainerLowest },
+  cardBtnText: { ...typography.labelLg, color: colors.onSurface, letterSpacing: 1 },
+  cardBtnTextLight: { ...typography.labelLg, color: colors.onTertiary, letterSpacing: 1 },
+  cardPressed: { opacity: 0.85, transform: [{ translateX: 2 }, { translateY: 2 }] },
+  joiningRow: { flexDirection: 'row', alignItems: 'center', gap: spacing.stackSm, marginTop: spacing.stackMd },
+  joiningText: { ...typography.labelLg, color: colors.onSurface, letterSpacing: 1 },
 });
