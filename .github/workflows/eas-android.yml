@@ -1,27 +1,24 @@
 name: EAS Android (build + submit)
 
-# Manual only: EAS builds are slow and consume metered build credits, so we don't
-# run them on every push. Trigger from Actions → "EAS Android" → Run workflow, and
-# pick the BRANCH there — the profile is derived from it:
+# Manual only: EAS builds are slow and consume metered build credits, so we
+# don't run them on every push. Trigger from Actions → "EAS Android" → Run workflow.
 #
-#   branch = main     → production profile → AAB, submitted to Play Store internal track
-#   branch = develop  → preview profile    → installable APK (staging), never submitted
+#   profile = production → AAB for the Play Store (submit to the internal track)
+#   profile = preview    → installable APK for quick on-device testing (never submits)
 #
-# Override with the `profile` input if you need a specific profile from any branch.
-#
-# FIRST PRODUCTION RELEASE: set submit = false once. Play Console rejects API uploads
-# until the app exists with one AAB uploaded by hand. Build once, upload that AAB to
-# the internal track manually, link the service account, then future runs can submit.
+# FIRST TIME: set submit = false. Play Console rejects API uploads until the app
+# exists with one AAB uploaded manually. Build once here, upload that AAB to the
+# internal track by hand, link the service account, then future runs can submit.
 on:
   workflow_dispatch:
     inputs:
       profile:
-        description: "Profile (auto = production on main, preview elsewhere)"
+        description: EAS build profile
         type: choice
-        options: [auto, production, preview]
-        default: auto
+        options: [production, preview]
+        default: production
       submit:
-        description: "Submit to Play Store (production only)"
+        description: "Submit to Play Store internal track (production only)"
         type: boolean
         default: true
 
@@ -31,7 +28,7 @@ defaults:
 
 jobs:
   build:
-    name: Build & (optionally) submit Android
+    name: Build & submit Android
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -47,42 +44,25 @@ jobs:
       # fail fast on the cheap runner before spending EAS build minutes
       - run: npm run typecheck
 
-      # Derive the profile from the branch (unless overridden), and decide whether
-      # to submit. Submit happens only for production AND when the toggle is on.
-      - name: Resolve profile
-        id: r
-        run: |
-          P="${{ inputs.profile }}"
-          if [ "$P" = "auto" ]; then
-            if [ "${{ github.ref_name }}" = "main" ]; then P=production; else P=preview; fi
-          fi
-          echo "profile=$P" >> "$GITHUB_OUTPUT"
-          if [ "$P" = "production" ] && [ "${{ inputs.submit }}" = "true" ]; then
-            echo "submit=true" >> "$GITHUB_OUTPUT"
-          else
-            echo "submit=false" >> "$GITHUB_OUTPUT"
-          fi
-          echo "Branch ${{ github.ref_name }} → profile=$P submit=$([ "$P" = production ] && echo ${{ inputs.submit }} || echo false)"
-
       - uses: expo/expo-github-action@v8
         with:
           eas-version: latest
           token: ${{ secrets.EXPO_TOKEN }}
 
       # The submit config (eas.json) points at ./google-service-account.json.
-      # Materialise it from the secret only when we're actually going to submit.
+      # Materialise it from the secret only when we're going to submit.
       - name: Write Google service-account key
-        if: ${{ steps.r.outputs.submit == 'true' }}
+        if: ${{ inputs.submit && inputs.profile == 'production' }}
         env:
           GOOGLE_SERVICE_ACCOUNT_JSON: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_JSON }}
         run: printf '%s' "$GOOGLE_SERVICE_ACCOUNT_JSON" > google-service-account.json
 
       - name: Build (and submit) with EAS
         run: |
-          if [ "${{ steps.r.outputs.submit }}" = "true" ]; then
+          if [ "${{ inputs.submit }}" = "true" ] && [ "${{ inputs.profile }}" = "production" ]; then
             eas build --platform android --profile production --non-interactive --auto-submit
           else
-            eas build --platform android --profile ${{ steps.r.outputs.profile }} --non-interactive
+            eas build --platform android --profile ${{ inputs.profile }} --non-interactive
           fi
 
       - name: Clean up service-account key
