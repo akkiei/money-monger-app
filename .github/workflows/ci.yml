@@ -1,0 +1,37 @@
+name: CI
+
+# CI gate for the frontend. Vercel handles web *deployment* (Git integration:
+# main → Production, develop/PRs → Preview), but Vercel only runs the bundler and
+# Metro does NOT typecheck — so type errors can reach a green deploy. This workflow
+# adds the missing checks: typecheck + a real web export build, on every PR and on
+# pushes to the deploy branches. Make it a required status check to block bad merges.
+on:
+  push:
+    branches: [main, develop]
+  pull_request:
+
+# A newer commit on the same ref cancels the in-flight run.
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+defaults:
+  run:
+    working-directory: money-monger
+
+jobs:
+  verify:
+    name: Typecheck · Web build
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+          cache-dependency-path: money-monger/package-lock.json
+      - run: npm ci
+      - run: npm run typecheck
+      # mirrors Vercel's build command; EXPO_PUBLIC_* fall back to safe defaults
+      # (see src/lib/env.ts), so this is a pure build check needing no secrets.
+      - run: npx expo export -p web
