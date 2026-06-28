@@ -17,6 +17,7 @@
       "supportsTablet": true
     },
     "android": {
+      "package": "com.akkiei.moneymonger",
       "adaptiveIcon": {
         "foregroundImage": "./assets/adaptive-icon.png",
         "backgroundColor": "#ffffff"
@@ -32,6 +33,13 @@
       "expo-secure-store",
       "expo-router",
       "expo-font"
-    ]
+    ],
+    "extra": {
+      "router": {},
+      "eas": {
+        "projectId": "700b36b5-c409-47bb-9251-69b05fd5e0db"
+      }
+    },
+    "owner": "akkiei"
   }
 }

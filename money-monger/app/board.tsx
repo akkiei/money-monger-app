@@ -125,6 +125,9 @@ export default function Board() {
   const [gameEnded, setGameEnded] = useState(false);
   // tile YOU bought this turn — don't offer to upgrade it until a later visit
   const [boughtThisTurn, setBoughtThisTurn] = useState<number | null>(null);
+  // the tile currently up for auction — used to suppress an immediate upgrade
+  // when YOU win it (an auction-won tile counts as bought this turn, same as PURCHASE).
+  const auctionTile = useRef<number | null>(null);
   // one upgrade per turn: set once YOU build, cleared on turn change → the
   // UPGRADE option disappears and the turn auto-ends after a single upgrade.
   const [upgradedThisTurn, setUpgradedThisTurn] = useState(false);
@@ -320,13 +323,19 @@ export default function Board() {
       if (m.playerId === me()) pushMoney('SALARY', true, `The Bank paid you ${cur()}${m.amount} salary.`);
     });
     on<{ tileIndex: number }>('AUCTION_STARTED', (m) => {
+      auctionTile.current = m.tileIndex;
       const s = get().snapshot;
       const passer = s ? who(s.turnOrder[s.turnIndex]) : 'Player';
       addFeed(`${passer} passed — ${tn(m.tileIndex)} to auction`, '🔨');
     });
     on<{ winnerId: string | null; amount: number }>('AUCTION_WON', (m) => {
       addFeed(m.winnerId ? `${who(m.winnerId)} won the auction for ${cur()}${m.amount}` : 'Auction passed — no bids', '🔨');
-      if (m.winnerId && m.winnerId === me()) pushMoney('AUCTION WON', true, `You won the auction for ${cur()}${m.amount}.`);
+      if (m.winnerId && m.winnerId === me()) {
+        pushMoney('AUCTION WON', true, `You won the auction for ${cur()}${m.amount}.`);
+        // treat a won tile like a same-turn purchase: no immediate upgrade
+        if (auctionTile.current !== null) setBoughtThisTurn(auctionTile.current);
+      }
+      auctionTile.current = null;
     });
     on<{ playerId: string; delta: number }>('CARD_DRAWN', (m) => {
       const amt = m.delta !== 0 ? ` (${m.delta > 0 ? '+' : '−'}${cur()}${Math.abs(m.delta)})` : '';
