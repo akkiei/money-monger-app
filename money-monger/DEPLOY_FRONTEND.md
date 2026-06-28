@@ -25,10 +25,26 @@ No workflow file — Vercel builds on every push once the repo is connected.
 2. **Root Directory** → `money-monger` (this is critical — the app is in a subdir).
 3. Framework preset → **Other** (the `vercel.json` already sets build command
    `expo export -p web`, output `dist`, and an SPA rewrite for expo-router).
-4. **Settings → Environment Variables** → add the three `EXPO_PUBLIC_*` vars
-   (Production + Preview). The WS URL should be a **`wss://`** (TLS) endpoint —
-   a browser on an `https://` Vercel page cannot open an insecure `ws://` socket.
-5. Deploy. Pushes to the default branch → Production; other branches / PRs → Preview URLs.
+4. **Settings → Environment Variables** → add the three `EXPO_PUBLIC_*` vars,
+   applied to **all environments** (Production + Preview). The WS URL should be a
+   **`wss://`** (TLS) endpoint — a browser on an `https://` Vercel page cannot open
+   an insecure `ws://` socket.
+5. Deploy.
+
+### Two environments: `main` (prod) + `develop` (staging)
+
+One Vercel project gives both — no second project needed:
+
+- **`main` → Production** — the stable production URL (`money-monger-app.vercel.app`).
+  Confirm **Settings → Git → Production Branch = `main`**.
+- **`develop` → Preview** — Vercel auto-builds every non-production branch and gives
+  `develop` a **stable alias** like `money-monger-app-git-develop-<scope>.vercel.app`.
+  That's the staging deployment. (Each PR also gets its own throwaway preview URL.)
+
+Both point at the **same Azure backend**, so the three `EXPO_PUBLIC_*` vars are
+identical across Production and Preview — set them once for all environments. (If you
+later add a separate dev backend, change `EXPO_PUBLIC_GAME_WS_URL` for the **Preview**
+scope only — Vercel scopes vars per environment.)
 
 > If deep-linked routes 404 on refresh, confirm the `rewrites` block in `vercel.json`
 > survived — it maps every path back to the SPA entry.
@@ -87,12 +103,30 @@ Play Console rejects API uploads until the app exists with one AAB uploaded by h
 2. In Play Console, create the app and upload that AAB to the **Internal testing** track manually.
 3. Confirm the service account now has access.
 
-### Ongoing
+### Two tracks: `main` (production) + `develop` (staging)
 
-Run the workflow with `profile = production`, `submit = true` → EAS builds the AAB
-(`autoIncrement` bumps `versionCode` remotely) and submits to the internal track.
-For a quick installable build without touching the store, use `profile = preview`
-(produces an APK; never submits).
+The workflow is **branch-aware** — pick the branch in the Run-workflow dialog and the
+profile follows (override with the `profile` input if needed):
+
+| Run from branch | Profile | Output | Submits? |
+|---|---|---|---|
+| `main` | `production` | AAB (`versionCode` auto-incremented remotely) | yes → Play internal track (if `submit` on) |
+| `develop` | `preview` | installable APK (staging) | never |
+
+Build-time env vars come from **EAS environments** matching the profile, so register the
+three public vars in both (same values, since both hit the same backend):
+
+```bash
+for ENV in production preview; do
+  eas env:create --name EXPO_PUBLIC_SUPABASE_URL      --value "https://<project>.supabase.co" --environment $ENV
+  eas env:create --name EXPO_PUBLIC_SUPABASE_ANON_KEY --value "<anon-key>"                    --environment $ENV
+  eas env:create --name EXPO_PUBLIC_GAME_WS_URL       --value "wss://game.example.com"         --environment $ENV
+done
+```
+
+> Want over-the-air (OTA) staging vs prod updates later? Add `expo-updates` and map
+> EAS Update **channels** (`develop`/`production`) to the profiles — then `develop`
+> pushes ship JS-only updates to the staging APK without a rebuild.
 
 ---
 
